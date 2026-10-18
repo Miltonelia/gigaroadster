@@ -197,8 +197,12 @@ function Lobby({
         <p className="font-display tracking-widest text-gold">STAR CIRCUIT</p>
         <h1 className="mt-2 text-5xl leading-none sm:text-7xl">$GIGAROADSTER</h1>
         <p className="mt-4 max-w-xl font-display text-lg tracking-wide text-fg sm:text-2xl">
-          BUILT FOR SPEED. <span className="text-violet">POWERED</span> BY{" "}
+          BUILT FOR SPEED. <span className="text-violet">LAUNCHING</span> ON{" "}
           <span className="text-mint">SOLANA</span>.
+        </p>
+        <p className="mt-3 max-w-xl rounded-lg border border-line bg-void/60 px-4 py-3 text-sm text-pretty text-muted">
+          <span className="font-display tracking-widest text-gold">SIMULATED GAME.</span> Points earned here are not real yet. The mission: make it real, so every point turns into real{" "}
+          <span className="text-fg">$GIGAROADSTER</span> token earnings.
         </p>
         <div className="mt-6 flex gap-6 text-gold">
           <Stat icon={<Hexagon className="size-6" />} label="Chassis" />
