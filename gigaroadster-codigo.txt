@@ -1,0 +1,2036 @@
+GIGAROADSTER GAME SOURCE
+
+
+========================================================================
+FILE: src/game/palette.ts
+========================================================================
+
+/** Brand colors sampled from the Gigaroadster plates. Canvas twin of the CSS tokens. */
+export const PALETTE = {
+  void: "#07060f",
+  ink: "#120e1e",
+  panel: "#1a152b",
+  violet: "#9945ff",
+  violetDeep: "#3b1570",
+  mint: "#14f195",
+  gold: "#d4b15a",
+  ivory: "#f6f3ec",
+  muted: "#a89bbd",
+  road: "#0c0a14",
+  rock: "#1b1730",
+} as const;
+
+
+========================================================================
+FILE: src/game/sim.ts
+========================================================================
+
+export type CarId = "performance" | "thrust" | "rocket";
+
+export type SimConfig = {
+  car: CarId;
+  thrusterLevel: number;
+  aeroLevel: number;
+  rocketMode: boolean;
+};
+
+export type EntityKind = "rock" | "orb";
+
+export type Entity = {
+  active: boolean;
+  kind: EntityKind;
+  x: number;
+  z: number;
+  resolved: boolean;
+};
+
+export type Particle = {
+  active: boolean;
+  x: number;
+  z: number;
+  vx: number;
+  vz: number;
+  life: number;
+  max: number;
+  hue: 0 | 1 | 2;
+};
+
+export type Phase = "racing" | "crashed";
+
+export type Input = {
+  /** +1 steers left on screen, -1 steers right. */
+  steer: number;
+  /** Held accelerator. */
+  throttle: boolean;
+  /** Held brake. Overrides the accelerator. */
+  brake: boolean;
+  boostEdge: boolean;
+  suctionEdge: boolean;
+  rocketEdge: boolean;
+};
+
+const POOL = 36;
+const PARTICLES = 90;
+const LANES = [-0.5, 0.5] as const;
+
+const CARS: Record<CarId, { accel: number; handling: number; top: number }> = {
+  performance: { accel: 0.7, handling: 1, top: 24 },
+  thrust: { accel: 0.95, handling: 1.12, top: 22 },
+  rocket: { accel: 0.6, handling: 0.9, top: 30 },
+};
+
+export type Sim = {
+  phase: Phase;
+  t: number;
+  distance: number;
+  speed: number;
+  yaw: number;
+  lateral: number;
+  latVel: number;
+  boostT: number;
+  boostCd: number;
+  suctionT: number;
+  suctionCd: number;
+  shieldT: number;
+  rocketT: number;
+  rocketLeft: number;
+  shake: number;
+  scrape: number;
+  braking: boolean;
+  throttleOn: boolean;
+  orbs: number;
+  nearMiss: number;
+  combo: number;
+  comboT: number;
+  sector: number;
+  banner: string;
+  bannerT: number;
+  flash: number;
+  spawnAcc: number;
+  lastOpen: number;
+  scroll: number;
+  crashT: number;
+  sfx: string | null;
+  entities: Entity[];
+  particles: Particle[];
+  config: SimConfig;
+};
+
+export function createSim(config: SimConfig): Sim {
+  return {
+    phase: "racing",
+    t: 0,
+    distance: 0,
+    speed: 0,
+    yaw: 0,
+    lateral: 0,
+    latVel: 0,
+    boostT: 0,
+    boostCd: 0,
+    suctionT: 0,
+    suctionCd: 0,
+    shieldT: 0,
+    rocketT: 0,
+    rocketLeft: config.rocketMode ? 1 : 0,
+    shake: 0,
+    scrape: 0,
+    braking: false,
+    throttleOn: false,
+    orbs: 0,
+    nearMiss: 0,
+    combo: 0,
+    comboT: 0,
+    sector: 0,
+    banner: "HOLD GAS",
+    bannerT: 1.15,
+    flash: 0,
+    spawnAcc: 0.85,
+    lastOpen: 1,
+    scroll: 0,
+    crashT: 0,
+    sfx: null,
+    entities: Array.from({ length: POOL }, () => ({
+      active: false,
+      kind: "rock" as const,
+      x: 0,
+      z: 0,
+      resolved: false,
+    })),
+    particles: Array.from({ length: PARTICLES }, () => ({
+      active: false,
+      x: 0,
+      z: 0,
+      vx: 0,
+      vz: 0,
+      life: 0,
+      max: 1,
+      hue: 0 as const,
+    })),
+    config,
+  };
+}
+
+export function payout(sim: Sim): number {
+  return Math.floor(sim.distance / 22) + sim.orbs * 18 + sim.nearMiss * 4;
+}
+
+function acquire(sim: Sim): Entity | null {
+  for (const e of sim.entities) {
+    if (!e.active) return e;
+  }
+  return null;
+}
+
+function burst(sim: Sim, x: number, z: number, hue: 0 | 1 | 2, n: number) {
+  let left = n;
+  for (const p of sim.particles) {
+    if (p.active) continue;
+    p.active = true;
+    p.x = x + (Math.random() - 0.5) * 0.2;
+    p.z = z;
+    p.vx = (Math.random() - 0.5) * 2.2;
+    p.vz = (Math.random() - 0.5) * 10;
+    p.max = 0.28 + Math.random() * 0.35;
+    p.life = p.max;
+    p.hue = hue;
+    left -= 1;
+    if (left <= 0) break;
+  }
+}
+
+function spawnWave(sim: Sim) {
+  const flip = Math.random() < 0.62;
+  const open = flip ? (sim.lastOpen === 0 ? 1 : 0) : sim.lastOpen;
+  sim.lastOpen = open;
+  const blocked = open === 0 ? 1 : 0;
+  const z0 = Math.max(96, sim.speed * 4.8);
+  const rock = acquire(sim);
+  if (rock) {
+    rock.active = true;
+    rock.kind = "rock";
+    rock.x = LANES[blocked];
+    rock.z = z0;
+    rock.resolved = false;
+  }
+  if (Math.random() < 0.7) {
+    const orb = acquire(sim);
+    if (!orb) return;
+    orb.active = true;
+    orb.kind = "orb";
+    orb.x = LANES[open];
+    orb.z = z0 + 8;
+    orb.resolved = false;
+  }
+}
+
+function crash(sim: Sim) {
+  if (sim.phase !== "racing") return;
+  sim.phase = "crashed";
+  sim.shake = 1.25;
+  sim.flash = 0.7;
+  sim.banner = "GRAVITY FAIL";
+  sim.bannerT = 2;
+  sim.sfx = "crash";
+  sim.latVel = 0;
+  burst(sim, sim.lateral, 1.2, 2, 18);
+}
+
+function tickParticles(sim: Sim, dt: number) {
+  for (const p of sim.particles) {
+    if (!p.active) continue;
+    p.life -= dt;
+    p.x += p.vx * dt;
+    p.z += p.vz * dt;
+    if (p.life <= 0) p.active = false;
+  }
+}
+
+export function step(sim: Sim, input: Input, dt: number) {
+  sim.t += dt;
+  sim.shake = Math.max(0, sim.shake - dt * 1.7);
+  sim.scrape = Math.max(0, sim.scrape - dt);
+  sim.flash = Math.max(0, sim.flash - dt * 1.4);
+  sim.bannerT = Math.max(0, sim.bannerT - dt);
+  sim.comboT = Math.max(0, sim.comboT - dt);
+  if (sim.comboT === 0) sim.combo = 0;
+  sim.boostCd = Math.max(0, sim.boostCd - dt);
+  sim.suctionCd = Math.max(0, sim.suctionCd - dt);
+  sim.boostT = Math.max(0, sim.boostT - dt);
+  sim.suctionT = Math.max(0, sim.suctionT - dt);
+  sim.shieldT = Math.max(0, sim.shieldT - dt);
+  sim.rocketT = Math.max(0, sim.rocketT - dt);
+  tickParticles(sim, dt);
+
+  if (sim.phase !== "racing") {
+    sim.speed = Math.max(0, sim.speed - dt * 40);
+    return;
+  }
+
+  const car = CARS[sim.config.car];
+  const handling = car.handling * (1 + sim.config.aeroLevel * 0.2);
+  const steer = Math.max(-1, Math.min(1, input.steer));
+
+  const grip = Math.min(1, Math.max(0.4, sim.speed / 10));
+  sim.yaw += steer * 2.5 * (sim.speed > 2 ? 1 : 0.4) * dt;
+  const targetVel = -steer * 2.35 * handling * grip;
+  const follow = sim.suctionT > 0 ? 14 : 7 + sim.config.aeroLevel;
+  sim.latVel += (targetVel - sim.latVel) * (1 - Math.exp(-follow * dt));
+  if (sim.suctionT > 0) sim.latVel += -sim.lateral * 9 * dt;
+  sim.lateral += sim.latVel * dt;
+
+  if (Math.abs(sim.lateral) > 0.86) {
+    sim.lateral = Math.sign(sim.lateral) * 0.86;
+    if (Math.sign(sim.latVel) === Math.sign(sim.lateral)) sim.latVel = 0;
+    sim.scrape = 0.12;
+    sim.shake = Math.max(sim.shake, 0.12);
+  }
+
+  const top = car.top + sim.config.thrusterLevel * 5 + Math.min(10, sim.distance / 1800);
+  let ceiling = top;
+  if (sim.boostT > 0) ceiling = top * (1.12 + sim.config.thrusterLevel * 0.03);
+  if (sim.rocketT > 0) ceiling = top * 1.38;
+  if (sim.scrape > 0) ceiling *= 0.8;
+
+  sim.braking = input.brake && sim.speed > 0.4;
+  const gas = (input.throttle || sim.boostT > 0 || sim.rocketT > 0) && !input.brake;
+  sim.throttleOn = gas;
+  if (input.brake) {
+    sim.speed = Math.max(0, sim.speed - (32 + sim.config.aeroLevel * 4) * dt);
+  } else if (gas) {
+    const rate = car.accel * (input.throttle ? 1 : 0.8);
+    sim.speed += (ceiling - sim.speed) * (1 - Math.exp(-rate * dt));
+  } else {
+    sim.speed = Math.max(0, sim.speed - 5 * dt);
+  }
+  sim.distance += sim.speed * dt;
+  sim.scroll += sim.speed * dt;
+
+  const sector = Math.floor(sim.distance / 1000);
+  if (sector > sim.sector) {
+    sim.sector = sector;
+    sim.banner = `SECTOR ${sector}`;
+    sim.bannerT = 1.3;
+    sim.flash = Math.max(sim.flash, 0.25);
+  }
+
+  if (input.boostEdge && sim.boostCd <= 0) {
+    sim.boostT = 1.35 + sim.config.thrusterLevel * 0.38;
+    sim.boostCd = 5.1;
+    sim.sfx = "boost";
+    sim.flash = Math.max(sim.flash, 0.3);
+  }
+
+  if (input.suctionEdge && sim.suctionCd <= 0) {
+    sim.suctionT = 0.7;
+    sim.suctionCd = Math.max(4.2, 6.4 - sim.config.aeroLevel * 0.35);
+    sim.shieldT = Math.max(sim.shieldT, 0.42);
+    sim.speed *= 0.9;
+    sim.sfx = "suction";
+    for (const e of sim.entities) {
+      if (!e.active || e.kind !== "rock") continue;
+      if (e.z < 0 || e.z > 26) continue;
+      if (Math.abs(e.x - sim.lateral) > 0.5) continue;
+      const dir = e.x >= sim.lateral ? 1 : -1;
+      e.x = Math.max(-1.35, Math.min(1.35, e.x + dir * 0.9));
+    }
+    burst(sim, sim.lateral, 2, 1, 10);
+  }
+
+  if (input.rocketEdge && sim.rocketLeft > 0) {
+    sim.rocketLeft = 0;
+    sim.rocketT = 2.2;
+    sim.shieldT = 2.2;
+    sim.sfx = "rocket";
+    sim.flash = 0.55;
+    for (const e of sim.entities) {
+      if (!e.active || e.kind !== "rock") continue;
+      if (e.z > 0 && e.z < 42 && Math.abs(e.x - sim.lateral) < 0.75) {
+        e.active = false;
+        burst(sim, e.x, e.z, 2, 6);
+      }
+    }
+  }
+
+  if (sim.boostT > 0 && Math.random() < 0.6) {
+    burst(sim, sim.lateral + (Math.random() - 0.5) * 0.3, 0.4, 1, 1);
+  }
+
+  if (sim.speed > 5) sim.spawnAcc += dt;
+  const interval = Math.max(1.8, 2.8 - sim.speed / 28);
+  if (sim.spawnAcc >= interval) {
+    sim.spawnAcc = 0;
+    spawnWave(sim);
+  }
+
+  for (const e of sim.entities) {
+    if (!e.active) continue;
+    const prevZ = e.z;
+    e.z -= sim.speed * dt;
+    if (e.z < -8) {
+      e.active = false;
+      continue;
+    }
+    if (e.resolved) continue;
+    const overlaps = prevZ > -0.4 && e.z < 2.4;
+    if (!overlaps) continue;
+    const dx = Math.abs(sim.lateral - e.x);
+    if (e.kind === "orb") {
+      if (dx < 0.34 && prevZ > 0 && e.z < 2) {
+        e.resolved = true;
+        e.active = false;
+        sim.orbs += 1;
+        sim.sfx = sim.sfx ?? "orb";
+        sim.flash = Math.max(sim.flash, 0.18);
+        burst(sim, e.x, 1, 1, 8);
+      } else if (e.z < 0) {
+        e.resolved = true;
+      }
+      continue;
+    }
+    if (prevZ > 0 && e.z < 1.8) {
+      e.resolved = true;
+      if (dx < 0.31) {
+        if (sim.shieldT > 0) {
+          e.active = false;
+          burst(sim, e.x, 1.2, 0, 8);
+          sim.shake = Math.max(sim.shake, 0.2);
+        } else {
+          crash(sim);
+        }
+      } else if (dx < 0.5) {
+        sim.nearMiss += 1;
+        sim.combo += 1;
+        sim.comboT = 1.6;
+        sim.banner = sim.combo > 1 ? `CLOSE ×${sim.combo}` : "CLOSE";
+        sim.bannerT = 0.7;
+        sim.shake = Math.max(sim.shake, 0.18);
+      }
+    }
+  }
+}
+
+
+========================================================================
+FILE: src/game/draw.ts
+========================================================================
+
+import { PALETTE } from "@/game/palette";
+import type { CarId, Sim } from "@/game/sim";
+
+const STARS = Array.from({ length: 160 }, () => ({
+  x: Math.random(),
+  y: Math.random() * 0.52,
+  r: Math.random() < 0.88 ? 0.7 : 1.6,
+  a: 0.28 + Math.random() * 0.72,
+  tw: Math.random() * Math.PI * 2,
+}));
+
+const visibleScratch: Sim["entities"] = [];
+
+type Proj = { x: number; y: number; s: number; half: number };
+
+function stage(w: number, h: number) {
+  const controls = Math.min(220, Math.max(156, h * 0.3));
+  const ground = h - controls;
+  const horizon = Math.min(h * 0.22, ground - 100);
+  return { controls, ground, horizon };
+}
+
+function project(w: number, h: number, z: number, x: number): Proj {
+  const { ground, horizon } = stage(w, h);
+  const depth = z + 2.2;
+  const s = 2.2 / depth;
+  const y = horizon + (ground - horizon) * Math.min(1.05, s);
+  const half = w * 0.92 * Math.min(1.05, s);
+  return { x: w * 0.5 + x * half, y, s, half };
+}
+
+function drawSky(ctx: CanvasRenderingContext2D, w: number, h: number, sim: Sim) {
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "#050314");
+  g.addColorStop(0.42, "#14082c");
+  g.addColorStop(0.62, "#1a0b22");
+  g.addColorStop(1, PALETTE.void);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.save();
+  ctx.translate(w * 0.55, h * 0.12);
+  ctx.rotate(-0.45);
+  const neb = ctx.createRadialGradient(0, 0, 10, 0, 0, w * 0.42);
+  neb.addColorStop(0, "rgba(153,69,255,0.28)");
+  neb.addColorStop(1, "rgba(153,69,255,0)");
+  ctx.fillStyle = neb;
+  ctx.fillRect(-w, -h * 0.4, w * 2, h);
+  ctx.restore();
+
+  const aurora = ctx.createLinearGradient(0, h * 0.28, 0, h * 0.46);
+  aurora.addColorStop(0, "rgba(20,241,149,0)");
+  aurora.addColorStop(0.5, "rgba(20,241,149,0.16)");
+  aurora.addColorStop(1, "rgba(20,241,149,0)");
+  ctx.fillStyle = aurora;
+  ctx.fillRect(0, h * 0.28, w, h * 0.2);
+
+  for (const s of STARS) {
+    const tw = 0.55 + Math.sin(sim.t * 1.7 + s.tw) * 0.45;
+    ctx.globalAlpha = s.a * tw;
+    ctx.fillStyle = PALETTE.ivory;
+    ctx.beginPath();
+    ctx.arc(s.x * w, s.y * h, s.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const drift = (sim.distance * 0.015) % (w + 200);
+  drawPlanet(ctx, w * 0.12 - drift * 0.05, h * 0.2, Math.min(w, h) * 0.11, "jupiter");
+  drawPlanet(ctx, w * 0.86 + drift * 0.03, h * 0.16, Math.min(w, h) * 0.055, "mars");
+  drawPlanet(ctx, w * 0.42, h * 0.1 + Math.sin(sim.t * 0.3) * 4, 7, "moon");
+}
+
+function drawPlanet(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  kind: "jupiter" | "mars" | "moon",
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.clip();
+  if (kind === "jupiter") {
+    const bands = ["#c4a36a", "#8d6b45", "#e6d2a8", "#6d4c32", "#b08958", "#d9c29a"];
+    for (let i = 0; i < bands.length; i++) {
+      ctx.fillStyle = bands[i];
+      ctx.fillRect(x - r, y - r + (i * r * 2) / bands.length, r * 2, r * 0.38);
+    }
+  } else if (kind === "mars") {
+    const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.1, x, y, r);
+    g.addColorStop(0, "#e7b089");
+    g.addColorStop(1, "#8a4632");
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  } else {
+    ctx.fillStyle = "#d9d3c7";
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(246,243,236,0.25)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawRoad(ctx: CanvasRenderingContext2D, w: number, h: number, sim: Sim) {
+  const farL = project(w, h, 90, -1.05);
+  const farR = project(w, h, 90, 1.05);
+  const nearR = project(w, h, 0, 1.05);
+  const nearL = project(w, h, 0, -1.05);
+  ctx.beginPath();
+  ctx.moveTo(farL.x, farL.y);
+  ctx.lineTo(farR.x, farR.y);
+  ctx.lineTo(nearR.x, nearR.y);
+  ctx.lineTo(nearL.x, nearL.y);
+  ctx.closePath();
+  const road = ctx.createLinearGradient(0, farL.y, 0, nearL.y);
+  road.addColorStop(0, "#24143f");
+  road.addColorStop(0.35, "#100c1c");
+  road.addColorStop(1, "#07060d");
+  ctx.fillStyle = road;
+  ctx.fill();
+
+  const span = 5.5;
+  const off = sim.scroll % span;
+  for (let i = 16; i >= 0; i--) {
+    const z1 = off + i * span;
+    const z2 = z1 + span * 0.92;
+    for (const side of [-1, 1]) {
+      const a = project(w, h, z1, side * 1.02);
+      const b = project(w, h, z2, side * 1.02);
+      const c = project(w, h, z2, side * 1.42);
+      const d = project(w, h, z1, side * 1.42);
+      const alt = (i + Math.floor(sim.scroll / span)) % 2 === 0;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.lineTo(c.x, c.y);
+      ctx.lineTo(d.x, d.y);
+      ctx.closePath();
+      ctx.fillStyle = alt ? "rgba(212,177,90,0.88)" : "rgba(198,220,230,0.38)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(246,243,236,0.25)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = PALETTE.gold;
+  ctx.beginPath();
+  ctx.moveTo(farL.x, farL.y);
+  ctx.lineTo(nearL.x, nearL.y);
+  ctx.moveTo(farR.x, farR.y);
+  ctx.lineTo(nearR.x, nearR.y);
+  ctx.stroke();
+
+  ctx.strokeStyle = "rgba(20,241,149,0.9)";
+  ctx.lineWidth = Math.max(3, w * 0.008);
+  const period = 7.2;
+  const dash = 3.1;
+  const shift = sim.scroll % period;
+  for (let i = 0; i < 14; i++) {
+    const z1 = shift + i * period;
+    const z2 = z1 + dash;
+    const a = project(w, h, z1, 0);
+    const b = project(w, h, z2, 0);
+    ctx.globalAlpha = Math.max(0.35, Math.min(1, 1.15 - z1 / 80));
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(212,177,90,0.35)";
+  for (const edge of [-0.52, 0.52]) {
+    ctx.beginPath();
+    const a = project(w, h, 2, edge);
+    const b = project(w, h, 80, edge);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  if (sim.scrape > 0) {
+    ctx.fillStyle = "rgba(212,177,90,0.18)";
+    ctx.fillRect(0, h * 0.7, w, h * 0.3);
+  }
+}
+
+function drawEntities(ctx: CanvasRenderingContext2D, w: number, h: number, sim: Sim) {
+  visibleScratch.length = 0;
+  for (const e of sim.entities) {
+    if (e.active && e.z > -2 && e.z < 100) visibleScratch.push(e);
+  }
+  visibleScratch.sort((a, b) => b.z - a.z);
+  for (const e of visibleScratch) {
+    const p = project(w, h, e.z, e.x);
+    if (e.kind === "orb") {
+      const rad = Math.max(4, p.s * w * 0.045);
+      ctx.save();
+      ctx.shadowColor = PALETTE.mint;
+      ctx.shadowBlur = 16;
+      const g = ctx.createRadialGradient(p.x, p.y, rad * 0.2, p.x, p.y, rad);
+      g.addColorStop(0, PALETTE.ivory);
+      g.addColorStop(0.5, PALETTE.mint);
+      g.addColorStop(1, "rgba(20,241,149,0.05)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      continue;
+    }
+    const rad = Math.max(8, p.s * w * 0.09);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.beginPath();
+    const n = 7;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 - 0.4;
+      const rr = rad * (i % 2 === 0 ? 1 : 0.68);
+      const x = Math.cos(a) * rr;
+      const y = Math.sin(a) * rr * 0.72;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    const rg = ctx.createLinearGradient(-rad, -rad, rad, rad);
+    rg.addColorStop(0, "#3a3358");
+    rg.addColorStop(1, "#100c18");
+    ctx.fillStyle = rg;
+    ctx.fill();
+    ctx.strokeStyle = PALETTE.violet;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  for (const p of sim.particles) {
+    if (!p.active) continue;
+    const at = project(w, h, Math.max(0, p.z), p.x);
+    const alpha = Math.max(0, p.life / p.max);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.hue === 1 ? PALETTE.mint : p.hue === 2 ? PALETTE.gold : "#c4b6e0";
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, Math.max(1.5, at.s * 18), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawCar(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  sim: Sim,
+  car: CarId,
+) {
+  const paint =
+    car === "rocket"
+      ? { body: "#e3c56a", body2: "#7a5410", glass: "#1a1030", seam: PALETTE.violet }
+      : car === "thrust"
+        ? { body: "#5ee0b5", body2: "#0c3b34", glass: "#041816", seam: PALETTE.gold }
+        : { body: "#9b5cff", body2: "#2a0d55", glass: "#140c24", seam: PALETTE.gold };
+  const p = project(w, h, 1.15, sim.lateral);
+  const bw = Math.max(78, p.half * 0.34);
+  const bh = bw * 0.78;
+  const bank = Math.max(-0.18, Math.min(0.18, -sim.latVel * 0.12));
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(bank);
+
+  ctx.save();
+  ctx.globalAlpha = 0.7 + (sim.throttleOn ? 0.25 : 0);
+  ctx.fillStyle = PALETTE.mint;
+  ctx.shadowColor = PALETTE.mint;
+  ctx.shadowBlur = 28;
+  ctx.beginPath();
+  ctx.ellipse(0, bh * 0.08, bw * 0.62, bh * 0.1, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  ctx.fillStyle = "#07070c";
+  round(ctx, -bw * 0.62, -bh * 0.02, bw * 0.2, bh * 0.34, 6);
+  ctx.fill();
+  round(ctx, bw * 0.42, -bh * 0.02, bw * 0.2, bh * 0.34, 6);
+  ctx.fill();
+
+  const body = ctx.createLinearGradient(0, -bh * 0.62, 0, bh * 0.2);
+  body.addColorStop(0, paint.body);
+  body.addColorStop(1, paint.body2);
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.moveTo(0, -bh * 0.58);
+  ctx.lineTo(bw * 0.46, -bh * 0.18);
+  ctx.lineTo(bw * 0.62, bh * 0.16);
+  ctx.lineTo(bw * 0.28, bh * 0.28);
+  ctx.lineTo(-bw * 0.28, bh * 0.28);
+  ctx.lineTo(-bw * 0.62, bh * 0.16);
+  ctx.lineTo(-bw * 0.46, -bh * 0.18);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = paint.seam;
+  ctx.lineWidth = Math.max(1.5, bw * 0.018);
+  ctx.beginPath();
+  ctx.moveTo(0, -bh * 0.5);
+  ctx.lineTo(-bw * 0.34, bh * 0.02);
+  ctx.moveTo(0, -bh * 0.5);
+  ctx.lineTo(bw * 0.34, bh * 0.02);
+  ctx.moveTo(-bw * 0.16, -bh * 0.34);
+  ctx.lineTo(bw * 0.16, -bh * 0.34);
+  ctx.stroke();
+
+  ctx.fillStyle = paint.glass;
+  ctx.beginPath();
+  ctx.moveTo(0, -bh * 0.5);
+  ctx.lineTo(bw * 0.2, -bh * 0.22);
+  ctx.lineTo(-bw * 0.2, -bh * 0.22);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.shadowColor = sim.braking ? PALETTE.gold : PALETTE.mint;
+  ctx.shadowBlur = sim.braking ? 16 : 8;
+  ctx.fillStyle = sim.braking ? PALETTE.ivory : PALETTE.mint;
+  round(ctx, -bw * 0.5, bh * 0.02, bw * 0.16, bh * 0.045, 3);
+  ctx.fill();
+  round(ctx, bw * 0.34, bh * 0.02, bw * 0.16, bh * 0.045, 3);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = "rgba(246,243,236,0.85)";
+  ctx.font = `600 ${Math.max(8, bw * 0.09)}px Oswald, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.fillText("GIRO", 0, bh * 0.2);
+  ctx.restore();
+}
+
+function round(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+}
+
+export function drawFrame(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  sim: Sim,
+  car: CarId,
+  reduceMotion: boolean,
+) {
+  ctx.save();
+  if (sim.shake > 0 && !reduceMotion) {
+    const mag = sim.shake * 12;
+    ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
+  }
+  drawSky(ctx, w, h, sim);
+  drawRoad(ctx, w, h, sim);
+  drawEntities(ctx, w, h, sim);
+  drawCar(ctx, w, h, sim, car);
+
+  if (sim.throttleOn || sim.boostT > 0 || sim.rocketT > 0) {
+    ctx.strokeStyle = sim.rocketT > 0 ? "rgba(212,177,90,0.35)" : "rgba(20,241,149,0.28)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 10; i++) {
+      const x = ((i + 0.5) / 10) * w;
+      ctx.beginPath();
+      ctx.moveTo(x, h * 0.36);
+      ctx.lineTo(w * 0.5 + (x - w * 0.5) * 1.15, h);
+      ctx.stroke();
+    }
+  }
+
+  if (sim.suctionT > 0) {
+    ctx.strokeStyle = "rgba(20,241,149,0.45)";
+    ctx.lineWidth = 2;
+    const c = project(w, h, 0.4, sim.lateral);
+    ctx.beginPath();
+    ctx.arc(c.x, Math.min(h * 0.8, c.y - 10), 70 + Math.sin(sim.t * 18) * 6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  const vg = ctx.createRadialGradient(w / 2, h * 0.55, w * 0.2, w / 2, h * 0.55, w * 0.75);
+  vg.addColorStop(0, "rgba(0,0,0,0)");
+  vg.addColorStop(1, "rgba(0,0,0,0.45)");
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, w, h);
+
+  if (sim.flash > 0) {
+    ctx.fillStyle = `rgba(20,241,149,${sim.flash * 0.22})`;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  if (sim.bannerT > 0 && sim.banner) {
+    ctx.globalAlpha = Math.min(1, sim.bannerT * 2);
+    ctx.fillStyle = PALETTE.ivory;
+    ctx.font = `600 ${Math.max(28, w * 0.06)}px Oswald, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(sim.banner, w / 2, h * 0.3);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+
+========================================================================
+FILE: src/game/audio.ts
+========================================================================
+
+/** Tiny Web Audio mixer. Resume only from a user gesture. */
+class Mixer {
+  private ctx: AudioContext | null = null;
+  private master: GainNode | null = null;
+  private engine: OscillatorNode | null = null;
+  private engineGain: GainNode | null = null;
+  private sfx: GainNode | null = null;
+  muted = false;
+  private hooked = false;
+
+  unlock() {
+    if (!this.ctx) {
+      const ctx = new AudioContext({ latencyHint: "interactive" });
+      const master = ctx.createGain();
+      master.gain.value = 0.85;
+      master.connect(ctx.destination);
+      const sfx = ctx.createGain();
+      sfx.gain.value = 0.7;
+      sfx.connect(master);
+      const engineGain = ctx.createGain();
+      engineGain.gain.value = 0;
+      engineGain.connect(master);
+      const osc = ctx.createOscillator();
+      osc.type = "sawtooth";
+      osc.frequency.value = 52;
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = 420;
+      osc.connect(filter);
+      filter.connect(engineGain);
+      osc.start();
+      this.ctx = ctx;
+      this.master = master;
+      this.sfx = sfx;
+      this.engine = osc;
+      this.engineGain = engineGain;
+    }
+    if (this.ctx.state === "suspended") void this.ctx.resume();
+    if (!this.hooked && typeof document !== "undefined") {
+      this.hooked = true;
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") this.unlock();
+      });
+    }
+  }
+
+  toggleMute() {
+    this.muted = !this.muted;
+    if (!this.ctx || !this.master) return this.muted;
+    this.master.gain.setTargetAtTime(this.muted ? 0 : 0.85, this.ctx.currentTime, 0.03);
+    return this.muted;
+  }
+
+  setDrive(speed: number, boost: boolean) {
+    if (!this.ctx || !this.engine || !this.engineGain) return;
+    const now = this.ctx.currentTime;
+    const freq = 46 + Math.min(160, speed * 1.15) + (boost ? 36 : 0);
+    this.engine.frequency.setTargetAtTime(freq, now, 0.08);
+    const gain = this.muted ? 0 : Math.min(0.045, 0.01 + speed * 0.00028);
+    this.engineGain.gain.setTargetAtTime(speed <= 0.5 ? 0 : gain, now, 0.06);
+  }
+
+  play(kind: string) {
+    if (!this.ctx || !this.sfx || this.muted) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(this.sfx);
+    let dur = 0.18;
+    if (kind === "orb") {
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(660 + Math.random() * 80, now);
+      osc.frequency.exponentialRampToValueAtTime(1180, now + 0.12);
+      dur = 0.16;
+    } else if (kind === "boost") {
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(180, now);
+      osc.frequency.exponentialRampToValueAtTime(640, now + 0.28);
+      dur = 0.32;
+    } else if (kind === "suction") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(420, now);
+      osc.frequency.exponentialRampToValueAtTime(90, now + 0.28);
+      dur = 0.3;
+    } else if (kind === "rocket") {
+      osc.type = "square";
+      osc.frequency.setValueAtTime(140, now);
+      osc.frequency.exponentialRampToValueAtTime(880, now + 0.4);
+      dur = 0.42;
+    } else if (kind === "crash") {
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(220, now);
+      osc.frequency.exponentialRampToValueAtTime(40, now + 0.4);
+      dur = 0.45;
+    } else if (kind === "buy") {
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.exponentialRampToValueAtTime(780, now + 0.1);
+      dur = 0.14;
+    } else {
+      osc.type = "sine";
+      osc.frequency.value = 300;
+    }
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(kind === "crash" ? 0.35 : 0.18, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.start(now);
+    osc.stop(now + dur + 0.02);
+    osc.onended = () => {
+      osc.disconnect();
+      gain.disconnect();
+    };
+  }
+}
+
+export const audio = new Mixer();
+
+
+========================================================================
+FILE: src/game/store.ts
+========================================================================
+
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import type { CarId } from "@/game/sim";
+
+type Save = {
+  giga: number;
+  pending: number;
+  wallet: string | null;
+  thruster: number;
+  aero: number;
+  rocketMode: boolean;
+  cars: Record<CarId, boolean>;
+  active: CarId;
+  best: number;
+  connect: () => void;
+  claim: () => void;
+  buy: (id: "thruster" | "aero" | "rocketMode") => boolean;
+  mint: (id: CarId) => boolean;
+  select: (id: CarId) => void;
+  bank: (earned: number, distance: number) => void;
+  cost: (id: "thruster" | "aero" | "rocketMode") => number | null;
+};
+
+const BASE = { thruster: 300, aero: 200, rocketMode: 500 } as const;
+export const MINT_COST: Record<CarId, number> = {
+  performance: 0,
+  thrust: 450,
+  rocket: 900,
+};
+
+export const useSave = create<Save>()(
+  persist(
+    (set, get) => ({
+      giga: 1000,
+      pending: 0,
+      wallet: null,
+      thruster: 0,
+      aero: 0,
+      rocketMode: false,
+      cars: { performance: true, thrust: false, rocket: false },
+      active: "performance",
+      best: 0,
+      connect: () => {
+        if (get().wallet) return;
+        const bytes = crypto.getRandomValues(new Uint8Array(3));
+        const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+        set({ wallet: `Giga…${hex}` });
+      },
+      claim: () => {
+        const pending = get().pending;
+        if (pending <= 0) return;
+        set({ giga: get().giga + pending, pending: 0 });
+      },
+      cost: (id) => {
+        const s = get();
+        if (id === "rocketMode") return s.rocketMode ? null : BASE.rocketMode;
+        const level = s[id];
+        if (level >= 3) return null;
+        return BASE[id] * (level + 1);
+      },
+      buy: (id) => {
+        const cost = get().cost(id);
+        if (cost == null || get().giga < cost) return false;
+        if (id === "rocketMode") {
+          set({ giga: get().giga - cost, rocketMode: true });
+          return true;
+        }
+        set({ giga: get().giga - cost, [id]: get()[id] + 1 });
+        return true;
+      },
+      mint: (id) => {
+        if (id === "performance" || get().cars[id]) return false;
+        const cost = MINT_COST[id];
+        if (get().giga < cost) return false;
+        set({
+          giga: get().giga - cost,
+          cars: { ...get().cars, [id]: true },
+          active: id,
+        });
+        return true;
+      },
+      select: (id) => {
+        if (!get().cars[id]) return;
+        set({ active: id });
+      },
+      bank: (earned, distance) => {
+        set({
+          pending: get().pending + Math.max(0, Math.floor(earned)),
+          best: Math.max(get().best, Math.floor(distance)),
+        });
+      },
+    }),
+    { name: "gigaroadster-save-v1", skipHydration: true },
+  ),
+);
+
+
+========================================================================
+FILE: src/game/probe.ts
+========================================================================
+
+export type ControlsProbe = {
+  getYaw: () => number;
+  getSpeed: () => number;
+  setSteer?: (v: number) => void;
+  setKeys?: (codes: string[]) => void;
+};
+
+declare global {
+  interface Window {
+    __controlsTest?: ControlsProbe;
+  }
+}
+
+
+========================================================================
+FILE: src/components/ui/button.tsx
+========================================================================
+
+import { cva, type VariantProps } from "class-variance-authority";
+import type { ButtonHTMLAttributes } from "react";
+import { cn } from "@/lib/cn";
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 rounded-full font-display uppercase tracking-wide transition duration-200 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold disabled:pointer-events-none disabled:opacity-40",
+  {
+    variants: {
+      variant: {
+        primary: "bg-mint text-void hover:bg-fg",
+        brake: "bg-violet text-fg hover:bg-fg hover:text-void",
+        gold: "border border-gold bg-transparent text-gold hover:bg-ink",
+        ghost: "border border-line bg-ink text-fg hover:border-violet",
+      },
+      size: {
+        sm: "min-h-11 px-4 text-sm",
+        md: "min-h-12 px-6 text-base",
+        lg: "min-h-14 px-8 text-lg",
+      },
+    },
+    defaultVariants: { variant: "primary", size: "md" },
+  },
+);
+
+type Props = ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants>;
+
+export function Button({ className, variant, size, type = "button", ...props }: Props) {
+  return <button type={type} className={cn(buttonVariants({ variant, size }), className)} {...props} />;
+}
+
+
+========================================================================
+FILE: src/components/race-view.tsx
+========================================================================
+
+import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Volume2, VolumeX } from "lucide-react";
+import { audio } from "@/game/audio";
+import { drawFrame } from "@/game/draw";
+import "@/game/probe";
+import {
+  createSim,
+  payout,
+  step,
+  type CarId,
+  type Input,
+  type Sim,
+} from "@/game/sim";
+import { Button } from "@/components/ui/button";
+
+type TouchFlags = {
+  left: boolean;
+  right: boolean;
+  gas: boolean;
+  brake: boolean;
+  boost: boolean;
+  suction: boolean;
+  rocket: boolean;
+};
+
+type Hud = {
+  phase: Sim["phase"];
+  speed: number;
+  distance: number;
+  orbs: number;
+  nearMiss: number;
+  payout: number;
+  boostCd: number;
+  suctionCd: number;
+  rocketLeft: number;
+  shield: boolean;
+};
+
+function snapshot(sim: Sim): Hud {
+  return {
+    phase: sim.phase,
+    speed: sim.speed,
+    distance: sim.distance,
+    orbs: sim.orbs,
+    nearMiss: sim.nearMiss,
+    payout: payout(sim),
+    boostCd: sim.boostCd,
+    suctionCd: sim.suctionCd,
+    rocketLeft: sim.rocketLeft,
+    shield: sim.shieldT > 0,
+  };
+}
+
+export function RaceView({
+  car,
+  thruster,
+  aero,
+  rocketMode,
+  onExit,
+}: {
+  car: CarId;
+  thruster: number;
+  aero: number;
+  rocketMode: boolean;
+  onExit: (earned: number, distance: number) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const simRef = useRef<Sim | null>(null);
+  const touchRef = useRef<TouchFlags>({
+    left: false,
+    right: false,
+    gas: false,
+    brake: false,
+    boost: false,
+    suction: false,
+    rocket: false,
+  });
+  const keysRef = useRef<Set<string>>(new Set());
+  const qaKeysRef = useRef<Set<string>>(new Set());
+  const qaSteerRef = useRef<number | null>(null);
+  const [hud, setHud] = useState<Hud | null>(null);
+  const [muted, setMuted] = useState(audio.muted);
+  const exited = useRef(false);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const sim = createSim({
+      car,
+      thrusterLevel: thruster,
+      aeroLevel: aero,
+      rocketMode,
+    });
+    simRef.current = sim;
+    setHud(snapshot(sim));
+
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const keys = keysRef.current;
+    const onKeyDown = (e: KeyboardEvent) => {
+      keys.add(e.code);
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(e.code)) {
+        e.preventDefault();
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      keys.delete(e.code);
+    };
+    const onBlur = () => keys.clear();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+
+    window.__controlsTest = {
+      getYaw: () => sim.yaw,
+      getSpeed: () => sim.speed,
+      setSteer: (v) => {
+        qaSteerRef.current = v;
+      },
+      setKeys: (codes) => {
+        qaKeysRef.current = new Set(codes);
+      },
+    };
+
+    let raf = 0;
+    let last = performance.now();
+    let hudAcc = 0;
+    let prevBoost = false;
+    let prevSuction = false;
+    let prevRocket = false;
+
+    const frame = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const down = (code: string) => keys.has(code) || qaKeysRef.current.has(code);
+      const touch = touchRef.current;
+      let steer = 0;
+      if (down("KeyA") || down("ArrowLeft") || touch.left) steer += 1;
+      if (down("KeyD") || down("ArrowRight") || touch.right) steer -= 1;
+      if (qaSteerRef.current != null) steer = qaSteerRef.current;
+      const boostDown = down("ShiftLeft") || down("ShiftRight") || touch.boost;
+      const suctionDown = down("Space") || down("KeyF") || touch.suction;
+      const rocketDown = down("KeyR") || touch.rocket;
+      const input: Input = {
+        steer: Math.max(-1, Math.min(1, steer)),
+        throttle: down("KeyW") || down("ArrowUp") || touch.gas,
+        brake: down("KeyS") || down("ArrowDown") || touch.brake,
+        boostEdge: boostDown && !prevBoost,
+        suctionEdge: suctionDown && !prevSuction,
+        rocketEdge: rocketDown && !prevRocket,
+      };
+      prevBoost = boostDown;
+      prevSuction = suctionDown;
+      prevRocket = rocketDown;
+
+      const before = sim.phase;
+      let acc = dt;
+      let first = true;
+      while (acc > 0.0001) {
+        const slice = Math.min(1 / 60, acc);
+        step(
+          sim,
+          first
+            ? input
+            : { ...input, boostEdge: false, suctionEdge: false, rocketEdge: false },
+          slice,
+        );
+        first = false;
+        acc -= slice;
+      }
+      if (sim.sfx) {
+        audio.play(sim.sfx);
+        sim.sfx = null;
+      }
+      audio.setDrive(sim.phase === "racing" ? sim.speed : 0, sim.boostT > 0 || sim.rocketT > 0);
+
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const bw = Math.max(1, Math.floor(rect.width * dpr));
+      const bh = Math.max(1, Math.floor(rect.height * dpr));
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw;
+        canvas.height = bh;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawFrame(ctx, rect.width, rect.height, sim, car, reduce);
+
+      hudAcc += dt;
+      if (hudAcc > 0.12 || sim.phase !== before) {
+        hudAcc = 0;
+        setHud(snapshot(sim));
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+      delete window.__controlsTest;
+      audio.setDrive(0, false);
+    };
+  }, [aero, car, rocketMode, thruster]);
+
+  const leave = () => {
+    if (exited.current) return;
+    exited.current = true;
+    const sim = simRef.current;
+    onExit(sim ? payout(sim) : 0, sim ? sim.distance : 0);
+  };
+
+  const press = (key: keyof TouchFlags) => ({
+    onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      audio.unlock();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      touchRef.current[key] = true;
+    },
+    onPointerUp: () => {
+      touchRef.current[key] = false;
+    },
+    onPointerCancel: () => {
+      touchRef.current[key] = false;
+    },
+  });
+
+  const kmh = Math.round((hud?.speed ?? 0) * 3.6);
+  const crashed = hud?.phase === "crashed";
+
+  return (
+    <div className="race-lock relative h-dvh w-full overflow-hidden bg-void text-fg">
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-label="Gigaroadster race" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 px-4 pt-4">
+        <div>
+          <p className="font-display text-lg tracking-wide">$GIGAROADSTER</p>
+          <p className="text-sm text-muted">W gas · S brake · A and D steer</p>
+        </div>
+        <div className="pr-14 text-right">
+          <p className="font-display text-5xl leading-none tabular-nums">{kmh}</p>
+          <p className="text-sm tracking-wide text-mint">KM/H</p>
+        </div>
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 top-20 flex flex-wrap justify-center gap-x-6 gap-y-1 px-4 text-sm tabular-nums">
+        <span>{Math.floor(hud?.distance ?? 0)} m</span>
+        <span className="text-mint">{hud?.orbs ?? 0} orbs</span>
+        <span className="text-gold">+{hud?.payout ?? 0} $GIRO</span>
+        {hud?.shield ? <span className="text-mint">Shield</span> : null}
+      </div>
+      {!crashed && (hud?.speed ?? 0) < 4 ? (
+        <p className="pointer-events-none absolute inset-x-0 top-36 text-center font-display text-3xl tracking-wide text-fg">
+          Hold Gas
+        </p>
+      ) : null}
+      <button
+        type="button"
+        className="absolute top-4 right-4 flex size-11 items-center justify-center rounded-full border border-line bg-ink text-fg"
+        aria-label={muted ? "Unmute" : "Mute"}
+        onClick={() => {
+          audio.unlock();
+          setMuted(audio.toggleMute());
+        }}
+      >
+        {muted ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
+      </button>
+
+      {crashed ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-void/80 p-4">
+          <div className="panel w-full max-w-md p-6 text-center">
+            <p className="font-display text-sm tracking-widest text-gold">GRAVITY FAIL</p>
+            <h2 className="mt-1 text-4xl">Run over</h2>
+            <p className="mt-3 text-pretty text-muted">
+              {Math.floor(hud?.distance ?? 0)} meters · {hud?.orbs ?? 0} orbs · {hud?.nearMiss ?? 0} close calls
+            </p>
+            <p className="mt-2 font-display text-3xl tabular-nums text-mint">+{hud?.payout ?? 0} $GIRO</p>
+            <p className="mt-1 text-sm text-muted">Saved as pending until you claim them.</p>
+            <Button className="mt-5 w-full" size="lg" onClick={leave}>
+              Save and exit
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 bg-void/80 p-3">
+          <div className="grid grid-cols-4 gap-2">
+            <Button variant="ghost" size="md" {...press("left")}>
+              Left
+            </Button>
+            <Button variant="primary" size="md" {...press("gas")}>
+              Gas
+            </Button>
+            <Button variant="brake" size="md" {...press("brake")}>
+              Brake
+            </Button>
+            <Button variant="ghost" size="md" {...press("right")}>
+              Right
+            </Button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="gold" size="md" {...press("suction")}>
+              Suction{(hud?.suctionCd ?? 0) > 0.2 ? ` ${Math.ceil(hud?.suctionCd ?? 0)}` : ""}
+            </Button>
+            <Button variant="ghost" size="md" {...press("boost")}>
+              Boost{(hud?.boostCd ?? 0) > 0.2 ? ` ${Math.ceil(hud?.boostCd ?? 0)}` : ""}
+            </Button>
+          </div>
+          {rocketMode ? (
+            <Button variant="gold" size="lg" {...press("rocket")} disabled={(hud?.rocketLeft ?? 1) === 0}>
+              {(hud?.rocketLeft ?? 1) > 0 ? "Rocket mode" : "Rocket used"}
+            </Button>
+          ) : null}
+          <button type="button" className="min-h-11 text-sm text-muted" onClick={leave}>
+            Paddock
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+========================================================================
+FILE: src/components/game-app.tsx
+========================================================================
+
+import { useEffect, useState, type ReactNode } from "react";
+import { Gauge, Hexagon, Leaf, Wallet } from "lucide-react";
+import { audio } from "@/game/audio";
+import type { CarId } from "@/game/sim";
+import { MINT_COST, useSave } from "@/game/store";
+import { RaceView } from "@/components/race-view";
+import { Button } from "@/components/ui/button";
+
+type View = "lobby" | "garage" | "shop" | "race";
+
+const CARS: { id: CarId; name: string; blurb: string; paint: string }[] = [
+  {
+    id: "performance",
+    name: "Performance",
+    blurb: "Factory violet. Balanced top speed and steering.",
+    paint: "",
+  },
+  {
+    id: "thrust",
+    name: "Thrust",
+    blurb: "Mint. Reaches speed sooner and changes lanes cleaner.",
+    paint: "paint-thrust",
+  },
+  {
+    id: "rocket",
+    name: "Rocket",
+    blurb: "Gold. Highest top speed. Add aero if you want sharper turns.",
+    paint: "paint-rocket",
+  },
+];
+
+export function GameApp() {
+  const [view, setView] = useState<View>("race");
+  const [note, setNote] = useState<string | null>(null);
+  const save = useSave();
+
+  useEffect(() => {
+    void useSave.persist.rehydrate();
+  }, []);
+
+  useEffect(() => {
+    if (!note) return;
+    const id = window.setTimeout(() => setNote(null), 2400);
+    return () => window.clearTimeout(id);
+  }, [note]);
+
+  const unlock = () => audio.unlock();
+
+  if (view === "race") {
+    return (
+      <RaceView
+        car={save.active}
+        thruster={save.thruster}
+        aero={save.aero}
+        rocketMode={save.rocketMode}
+        onExit={(earned, distance) => {
+          save.bank(earned, distance);
+          setNote(
+            earned > 0
+              ? `+${earned} $GIRO pending. Claim it in the paddock.`
+              : "Short run. The paddock is still open.",
+          );
+          setView("lobby");
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className="sky-wash relative min-h-dvh overflow-x-hidden text-fg">
+      <img
+        src="/art/banner.jpg"
+        alt=""
+        className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-35"
+      />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-void/70 via-void/80 to-void" />
+      <div className="gold-corners pointer-events-none absolute inset-3 sm:inset-4" />
+
+      <div className="relative mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-5 py-6 sm:px-8">
+        <header className="flex items-center justify-between gap-3">
+          <p className="font-display text-xl tracking-wide sm:text-2xl">$GIGAROADSTER</p>
+          <div className="flex items-center gap-2">
+            <p className="text-right text-sm leading-tight">
+              <span className="block tabular-nums text-mint">{save.giga} $GIRO</span>
+              <span className="text-muted">{save.wallet ?? "No wallet"}</span>
+            </p>
+            <Button
+              size="sm"
+              variant={save.wallet ? "ghost" : "gold"}
+              onClick={() => {
+                unlock();
+                save.connect();
+              }}
+            >
+              <Wallet className="size-4" aria-hidden />
+              {save.wallet ? "Linked" : "Connect"}
+            </Button>
+          </div>
+        </header>
+
+        {view === "lobby" ? (
+          <Lobby
+            best={save.best}
+            pending={save.pending}
+            onRace={() => {
+              unlock();
+              setView("race");
+            }}
+            onGarage={() => setView("garage")}
+            onShop={() => setView("shop")}
+            onClaim={() => {
+              unlock();
+              if (save.pending <= 0) {
+                setNote("No rewards waiting.");
+                return;
+              }
+              audio.play("buy");
+              save.claim();
+              setNote("Rewards added to your balance.");
+            }}
+          />
+        ) : null}
+
+        {view === "garage" ? (
+          <Garage
+            active={save.active}
+            cars={save.cars}
+            giga={save.giga}
+            onBack={() => setView("lobby")}
+            onSelect={(id) => {
+              unlock();
+              save.select(id);
+            }}
+            onMint={(id) => {
+              unlock();
+              const ok = save.mint(id);
+              audio.play(ok ? "buy" : "crash");
+              setNote(ok ? `${label(id)} minted into the garage.` : "Not enough $GIRO.");
+            }}
+          />
+        ) : null}
+
+        {view === "shop" ? (
+          <Shop
+            giga={save.giga}
+            thruster={save.thruster}
+            aero={save.aero}
+            rocketMode={save.rocketMode}
+            onBack={() => setView("lobby")}
+            onBuy={(id) => {
+              unlock();
+              const ok = save.buy(id);
+              audio.play(ok ? "buy" : "crash");
+              setNote(ok ? "Part installed." : "Not enough $GIRO.");
+            }}
+          />
+        ) : null}
+
+        <footer className="mt-auto flex flex-col items-center gap-3 pt-10 pb-2">
+          <p className="text-center font-display text-sm tracking-widest text-gold">
+            FAST · DECENTRALIZED · LIMITLESS
+          </p>
+          <SolanaMark />
+          {note ? (
+            <p className="text-center text-sm text-mint" role="status">
+              {note}
+            </p>
+          ) : (
+            <p className="max-w-md text-center text-sm text-pretty text-muted">
+              Demo wallet. Nothing is signed or leaves this browser.
+            </p>
+          )}
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function Lobby({
+  best,
+  pending,
+  onRace,
+  onGarage,
+  onShop,
+  onClaim,
+}: {
+  best: number;
+  pending: number;
+  onRace: () => void;
+  onGarage: () => void;
+  onShop: () => void;
+  onClaim: () => void;
+}) {
+  return (
+    <div className="grid flex-1 items-center gap-8 py-8 lg:grid-cols-[1.1fr_0.9fr]">
+      <div className="order-2 lg:order-1">
+        <p className="font-display tracking-widest text-gold">STAR CIRCUIT</p>
+        <h1 className="mt-2 text-5xl leading-none sm:text-7xl">$GIGAROADSTER</h1>
+        <p className="mt-4 max-w-xl font-display text-lg tracking-wide text-fg sm:text-2xl">
+          BUILT FOR SPEED. <span className="text-violet">POWERED</span> BY{" "}
+          <span className="text-mint">SOLANA</span>.
+        </p>
+        <div className="mt-6 flex gap-6 text-gold">
+          <Stat icon={<Hexagon className="size-6" />} label="Chassis" />
+          <Stat icon={<Leaf className="size-6" />} label="Thrust" />
+          <Stat icon={<Gauge className="size-6" />} label="No limit" />
+        </div>
+        <p className="mt-6 max-w-md text-pretty text-muted">
+          Dodge asteroids on the crystal bridge, grab orbs, and bank $GIRO. Hold gas to accelerate and brake to stop. Best distance:{" "}
+          <span className="tabular-nums text-fg">{best} m</span>.
+        </p>
+        <div className="sticky bottom-0 z-10 -mx-5 mt-6 flex flex-col gap-2 border-t border-line bg-void/90 px-5 py-3 sm:-mx-8 sm:flex-row sm:px-8">
+          <Button size="lg" className="w-full sm:w-auto" onClick={onRace}>
+            Start race
+          </Button>
+          <Button size="lg" variant="gold" className="w-full sm:w-auto" onClick={onGarage}>
+            Garage
+          </Button>
+          <Button size="lg" variant="ghost" className="w-full sm:w-auto" onClick={onShop}>
+            Shop
+          </Button>
+        </div>
+        <div className="panel mt-6 flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm text-muted">Pending rewards</p>
+            <p className="font-display text-2xl tabular-nums text-mint">{pending} $GIRO</p>
+          </div>
+          <Button variant="gold" onClick={onClaim} disabled={pending <= 0}>
+            Claim
+          </Button>
+        </div>
+      </div>
+      <div className="order-1 flex justify-center lg:order-2">
+        <div className="relative aspect-square w-full max-w-64 sm:max-w-sm lg:max-w-md">
+          <div className="orbit-ring pointer-events-none absolute -inset-3 rounded-full border border-dashed border-gold" />
+          <img
+            src="/art/cosmos.png"
+            alt="Violet Gigaroadster on a crystal bridge among planets"
+            className="gold-ring h-full w-full rounded-full object-cover"
+            width={900}
+            height={1200}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ icon, label }: { icon: ReactNode; label: string }) {
+  return (
+    <div className="flex flex-col items-center gap-2">
+      {icon}
+      <span className="text-sm text-muted">{label}</span>
+    </div>
+  );
+}
+
+function Garage({
+  active,
+  cars,
+  giga,
+  onBack,
+  onSelect,
+  onMint,
+}: {
+  active: CarId;
+  cars: Record<CarId, boolean>;
+  giga: number;
+  onBack: () => void;
+  onSelect: (id: CarId) => void;
+  onMint: (id: CarId) => void;
+}) {
+  return (
+    <section className="py-8">
+      <div className="mb-6 flex items-end justify-between gap-3">
+        <div>
+          <p className="font-display tracking-widest text-gold">GARAGE</p>
+          <h1 className="text-4xl sm:text-5xl">Mint cars</h1>
+        </div>
+        <Button variant="ghost" onClick={onBack}>
+          Back
+        </Button>
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        {CARS.map((car) => {
+          const owned = cars[car.id];
+          const cost = MINT_COST[car.id];
+          const selected = active === car.id;
+          return (
+            <article key={car.id} className="panel overflow-hidden">
+              <div className="relative aspect-[4/5] bg-ink">
+                <img
+                  src={car.id === "performance" ? "/art/emblem.jpg" : "/art/cosmos.png"}
+                  alt=""
+                  className={`h-full w-full object-cover ${car.paint}`}
+                />
+                {selected ? (
+                  <span className="absolute top-3 left-3 rounded-full bg-mint px-3 py-1 font-display text-sm text-void">
+                    On track
+                  </span>
+                ) : null}
+              </div>
+              <div className="p-4">
+                <h2 className="text-2xl">{car.name}</h2>
+                <p className="mt-1 text-sm text-pretty text-muted">{car.blurb}</p>
+                <div className="mt-4">
+                  {owned ? (
+                    <Button className="w-full" variant={selected ? "ghost" : "primary"} onClick={() => onSelect(car.id)}>
+                      {selected ? "Selected" : "Choose"}
+                    </Button>
+                  ) : (
+                    <Button className="w-full" variant="gold" disabled={giga < cost} onClick={() => onMint(car.id)}>
+                      Mint · {cost} $GIRO
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function Shop({
+  giga,
+  thruster,
+  aero,
+  rocketMode,
+  onBack,
+  onBuy,
+}: {
+  giga: number;
+  thruster: number;
+  aero: number;
+  rocketMode: boolean;
+  onBack: () => void;
+  onBuy: (id: "thruster" | "aero" | "rocketMode") => void;
+}) {
+  const cost = useSave.getState().cost;
+  const rows: {
+    id: "thruster" | "aero" | "rocketMode";
+    name: string;
+    blurb: string;
+    level: string;
+  }[] = [
+    {
+      id: "thruster",
+      name: "Thrusters",
+      blurb: "Extends boost and raises top speed.",
+      level: `${thruster}/3`,
+    },
+    {
+      id: "aero",
+      name: "Active Aero",
+      blurb: "Sharper steering and a shorter suction cooldown.",
+      level: `${aero}/3`,
+    },
+    {
+      id: "rocketMode",
+      name: "Rocket Mode",
+      blurb: "Once per run: clears your lane and breaks the limit.",
+      level: rocketMode ? "Installed" : "Not installed",
+    },
+  ];
+
+  return (
+    <section className="py-8">
+      <div className="mb-6 flex items-end justify-between gap-3">
+        <div>
+          <p className="font-display tracking-widest text-gold">SHOP</p>
+          <h1 className="text-4xl sm:text-5xl">Parts</h1>
+        </div>
+        <Button variant="ghost" onClick={onBack}>
+          Back
+        </Button>
+      </div>
+      <ul className="grid gap-3">
+        {rows.map((row) => {
+          const price = cost(row.id);
+          return (
+            <li key={row.id} className="panel flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-2xl">{row.name}</h2>
+                <p className="text-sm text-pretty text-muted">{row.blurb}</p>
+                <p className="mt-1 text-sm text-gold">{row.level}</p>
+              </div>
+              <Button
+                variant="primary"
+                disabled={price == null || giga < price}
+                onClick={() => onBuy(row.id)}
+              >
+                {price == null ? "Maxed" : `Buy · ${price}`}
+              </Button>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-4 text-sm text-muted">Balance {giga} $GIRO. Gas is W, brake is S, steer with A and D. Shift boosts, Space is suction, R is rocket.</p>
+    </section>
+  );
+}
+
+function SolanaMark() {
+  return (
+    <svg width="36" height="28" viewBox="0 0 36 28" aria-hidden className="text-mint">
+      <path d="M4 6h22l-4-4H0l4 4z" fill="currentColor" />
+      <path d="M4 16h22l-4-4H0l4 4z" fill="#9945ff" />
+      <path d="M4 26h22l-4-4H0l4 4z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function label(id: CarId) {
+  if (id === "thrust") return "Thrust";
+  if (id === "rocket") return "Rocket";
+  return "Performance";
+}
+
+
+========================================================================
+FILE: src/styles.css
+========================================================================
+
+@import "tailwindcss";
+@import "@fontsource/oswald/latin-500.css";
+@import "@fontsource/oswald/latin-600.css";
+@import "@fontsource/outfit/latin-400.css";
+@import "@fontsource/outfit/latin-500.css";
+@import "@fontsource/outfit/latin-600.css";
+
+@theme {
+  --color-void: #07060f;
+  --color-ink: #120e1e;
+  --color-panel: #1a152b;
+  --color-line: #3c335c;
+  --color-fg: #f6f3ec;
+  --color-muted: #a89bbd;
+  --color-violet: #9945ff;
+  --color-mint: #14f195;
+  --color-gold: #d4b15a;
+  --font-display: "Oswald", sans-serif;
+  --font-sans: "Outfit", system-ui, sans-serif;
+  --radius-card: 1.25rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background: var(--color-void);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  .sky-wash {
+    background:
+      radial-gradient(ellipse at 18% 12%, color-mix(in oklab, var(--color-violet) 42%, transparent), transparent 46%),
+      radial-gradient(ellipse at 86% 8%, color-mix(in oklab, var(--color-mint) 16%, transparent), transparent 38%),
+      radial-gradient(ellipse at 50% 110%, color-mix(in oklab, var(--color-violet) 28%, transparent), transparent 52%),
+      var(--color-void);
+  }
+
+  .gold-corners {
+    background:
+      linear-gradient(var(--color-gold), var(--color-gold)) left top / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) left top / 1px 36px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right top / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right top / 1px 36px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) left bottom / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) left bottom / 1px 36px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right bottom / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right bottom / 1px 36px no-repeat;
+  }
+
+  .gold-ring {
+    border: 2px solid var(--color-gold);
+    box-shadow:
+      0 0 0 7px color-mix(in oklab, var(--color-gold) 22%, transparent),
+      0 24px 70px color-mix(in oklab, var(--color-violet) 38%, transparent);
+  }
+
+  .orbit-ring {
+    animation: orbit 42s linear infinite;
+  }
+
+  .panel {
+    background: color-mix(in oklab, var(--color-ink) 88%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-gold) 38%, var(--color-line));
+    border-radius: var(--radius-card);
+  }
+}
+
+@keyframes orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit-ring {
+    animation: none;
+  }
+}
+
+.race-lock {
+  touch-action: none;
+  user-select: none;
+}
+
+.paint-thrust {
+  filter: hue-rotate(78deg) saturate(1.45) brightness(1.08);
+}
+
+.paint-rocket {
+  filter: hue-rotate(-28deg) saturate(1.7) brightness(1.12) sepia(0.45);
+}
+
+
+========================================================================
+FILE: src/routes/index.tsx
+========================================================================
+
+import { createFileRoute } from "@tanstack/react-router";
+import { GameApp } from "@/components/game-app";
+
+export const Route = createFileRoute("/")({ component: GameApp });
+
+
+========================================================================
+FILE: src/routes/__root.tsx
+========================================================================
+
+import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { AuthProvider } from "@/lib/auth/provider";
+import { PreviewHostBridge } from "@/components/preview-host-bridge";
+import appCss from "../styles.css?url";
+
+const APP_NAME = "Gigaroadster Racing";
+
+export const Route = createRootRoute({
+  head: () => ({
+    meta: [
+      { charSet: "utf-8" },
+      { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { title: APP_NAME },
+      { name: "theme-color", content: "#07060f" },
+      {
+        name: "description",
+        content:
+          "Endless $GIGAROADSTER race. Earn $GIRO. Violet, gold, and mint on a crystal bridge. Built for speed. Powered by Solana.",
+      },
+    ],
+    links: [
+      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+      { rel: "stylesheet", href: appCss },
+      { rel: "manifest", href: "/__grok/manifest.webmanifest" },
+      { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
+    ],
+  }),
+  component: () => (
+    <html lang="en" className="antialiased" suppressHydrationWarning>
+      <head>
+        <HeadContent />
+      </head>
+      <body>
+        <PreviewHostBridge />
+        <AuthProvider>
+          <Outlet />
+        </AuthProvider>
+        <Scripts />
+      </body>
+    </html>
+  ),
+});

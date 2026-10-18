@@ -1,0 +1,111 @@
+@import "tailwindcss";
+@import "@fontsource/oswald/latin-500.css";
+@import "@fontsource/oswald/latin-600.css";
+@import "@fontsource/outfit/latin-400.css";
+@import "@fontsource/outfit/latin-500.css";
+@import "@fontsource/outfit/latin-600.css";
+
+@theme {
+  --color-void: #07060f;
+  --color-ink: #120e1e;
+  --color-panel: #1a152b;
+  --color-line: #3c335c;
+  --color-fg: #f6f3ec;
+  --color-muted: #a89bbd;
+  --color-violet: #9945ff;
+  --color-mint: #14f195;
+  --color-gold: #d4b15a;
+  --font-display: "Oswald", sans-serif;
+  --font-sans: "Outfit", system-ui, sans-serif;
+  --radius-card: 1.25rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background: var(--color-void);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  .sky-wash {
+    background:
+      radial-gradient(ellipse at 18% 12%, color-mix(in oklab, var(--color-violet) 42%, transparent), transparent 46%),
+      radial-gradient(ellipse at 86% 8%, color-mix(in oklab, var(--color-mint) 16%, transparent), transparent 38%),
+      radial-gradient(ellipse at 50% 110%, color-mix(in oklab, var(--color-violet) 28%, transparent), transparent 52%),
+      var(--color-void);
+  }
+
+  .gold-corners {
+    background:
+      linear-gradient(var(--color-gold), var(--color-gold)) left top / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) left top / 1px 36px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right top / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right top / 1px 36px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) left bottom / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) left bottom / 1px 36px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right bottom / 36px 1px no-repeat,
+      linear-gradient(var(--color-gold), var(--color-gold)) right bottom / 1px 36px no-repeat;
+  }
+
+  .gold-ring {
+    border: 2px solid var(--color-gold);
+    box-shadow:
+      0 0 0 7px color-mix(in oklab, var(--color-gold) 22%, transparent),
+      0 24px 70px color-mix(in oklab, var(--color-violet) 38%, transparent);
+  }
+
+  .orbit-ring {
+    animation: orbit 42s linear infinite;
+  }
+
+  .panel {
+    background: color-mix(in oklab, var(--color-ink) 88%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-gold) 38%, var(--color-line));
+    border-radius: var(--radius-card);
+  }
+}
+
+@keyframes orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit-ring {
+    animation: none;
+  }
+}
+
+.race-lock {
+  touch-action: none;
+  user-select: none;
+}
+
+.paint-thrust {
+  filter: hue-rotate(78deg) saturate(1.45) brightness(1.08);
+}
+
+.paint-rocket {
+  filter: hue-rotate(-28deg) saturate(1.7) brightness(1.12) sepia(0.45);
+}

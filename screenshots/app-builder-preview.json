@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Gigaroadster Racing",
+      "hasCanvas": false,
+      "bodyTextLen": 392,
+      "bodyTextHash": "789fc9c4f32776212a99ed74a5c6b7c60cc8129a857b761e0ca2e6b32036db56",
+      "bodyTextPrefix": "$GIGAROADSTER 1000 $GIGA Sin wallet CONECTAR CIRCUITO ESTELAR $G",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Gigaroadster Racing",
+      "hasCanvas": false,
+      "bodyTextLen": 392,
+      "bodyTextHash": "789fc9c4f32776212a99ed74a5c6b7c60cc8129a857b761e0ca2e6b32036db56",
+      "bodyTextPrefix": "$GIGAROADSTER 1000 $GIGA Sin wallet CONECTAR CIRCUITO ESTELAR $G",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
