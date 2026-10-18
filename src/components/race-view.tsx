@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { Volume2, VolumeX } from "lucide-react";
+import { ChevronLeft, ChevronRight, Volume2, VolumeX } from "lucide-react";
 import { audio } from "@/game/audio";
 import { drawFrame } from "@/game/draw";
 import "@/game/probe";
@@ -282,37 +282,40 @@ export function RaceView({
           </div>
         </div>
       ) : (
-        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 bg-void/80 p-3">
-          <div className="grid grid-cols-4 gap-2">
-            <Button variant="ghost" size="md" {...press("left")}>
-              Left
-            </Button>
-            <Button variant="primary" size="md" {...press("gas")}>
-              Gas
-            </Button>
-            <Button variant="brake" size="md" {...press("brake")}>
-              Brake
-            </Button>
-            <Button variant="ghost" size="md" {...press("right")}>
-              Right
-            </Button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="gold" size="md" {...press("suction")}>
-              Suction{(hud?.suctionCd ?? 0) > 0.2 ? ` ${Math.ceil(hud?.suctionCd ?? 0)}` : ""}
-            </Button>
-            <Button variant="ghost" size="md" {...press("boost")}>
-              Boost{(hud?.boostCd ?? 0) > 0.2 ? ` ${Math.ceil(hud?.boostCd ?? 0)}` : ""}
-            </Button>
+        <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 bg-void/80 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <div className="flex items-center gap-2">
+            <button type="button" className="min-h-11 shrink-0 px-2 text-sm text-muted" onClick={leave}>
+              Paddock
+            </button>
+            <div className="grid flex-1 grid-cols-2 gap-2">
+              <Button variant="gold" size="sm" {...press("suction")}>
+                Suction{(hud?.suctionCd ?? 0) > 0.2 ? ` ${Math.ceil(hud?.suctionCd ?? 0)}` : ""}
+              </Button>
+              <Button variant="ghost" size="sm" {...press("boost")}>
+                Boost{(hud?.boostCd ?? 0) > 0.2 ? ` ${Math.ceil(hud?.boostCd ?? 0)}` : ""}
+              </Button>
+            </div>
           </div>
           {rocketMode ? (
-            <Button variant="gold" size="lg" {...press("rocket")} disabled={(hud?.rocketLeft ?? 1) === 0}>
+            <Button variant="gold" size="md" {...press("rocket")} disabled={(hud?.rocketLeft ?? 1) === 0}>
               {(hud?.rocketLeft ?? 1) > 0 ? "Rocket mode" : "Rocket used"}
             </Button>
           ) : null}
-          <button type="button" className="min-h-11 text-sm text-muted" onClick={leave}>
-            Paddock
-          </button>
+          {/* Thumb pads: gas under the left thumb, brake under the right, steering in the middle. */}
+          <div className="grid grid-cols-[1.25fr_1fr_1fr_1.25fr] gap-2">
+            <Button variant="primary" className="h-20 rounded-2xl px-2 text-lg" {...press("gas")}>
+              Gas
+            </Button>
+            <Button variant="ghost" className="h-20 rounded-2xl px-2" aria-label="Steer left" {...press("left")}>
+              <ChevronLeft className="size-9" />
+            </Button>
+            <Button variant="ghost" className="h-20 rounded-2xl px-2" aria-label="Steer right" {...press("right")}>
+              <ChevronRight className="size-9" />
+            </Button>
+            <Button variant="brake" className="h-20 rounded-2xl px-2 text-lg" {...press("brake")}>
+              Brake
+            </Button>
+          </div>
         </div>
       )}
     </div>
