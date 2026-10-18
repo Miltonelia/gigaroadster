@@ -170,7 +170,12 @@ export default defineConfig(({ command, isPreview }) => ({
     ...(command === "build" || isPreview
       ? [
           nitro({
-            preset: "vercel",
+            // Netlify's UI publish directory is `dist/client`. The Vercel preset
+            // never creates that folder, so the deploy fails after a green build.
+            preset: process.env.NETLIFY ? "netlify" : "vercel",
+            ...(process.env.NETLIFY
+              ? { output: { publicDir: "dist/client" } }
+              : {}),
             // Auto-registers server/middleware/* (the PWA install page +
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
