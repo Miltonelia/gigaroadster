@@ -15,7 +15,7 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Endless $GIGAROADSTER race. Earn $GIRO. Violet, gold, and mint on a crystal bridge. Built for speed. Powered by Solana.",
+          "Endless $GIGAROADSTER race. Earn $GIRO. Violet, gold, and mint on a crystal bridge. Built for speed. Launching on Solana. Simulated game: the mission is to make it real.",
       },
     ],
     links: [
